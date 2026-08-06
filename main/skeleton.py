@@ -1,45 +1,39 @@
 import time
-
 import cv2
-import mediapipe as mp
-from mediapipe.framework.formats import landmark_pb2
+
+from mediapipe.tasks.python.vision.core.image import Image, ImageFormat
 from mediapipe.tasks.python import BaseOptions
 from mediapipe.tasks.python.vision import (
     PoseLandmarker,
     PoseLandmarkerOptions,
+    PoseLandmarksConnections,
     RunningMode,
+    drawing_styles,
+    drawing_utils,
 )
 
 from camera import Camera
 
 MODEL_PATH = "model\pose_landmarker_full.task"
 
-
 class Skeleton:
     def __init__(self, model_path: str = MODEL_PATH):
         self.camera = Camera(0, 405, 720)
-
-        options = PoseLandmarkerOptions(
+        self.options = PoseLandmarkerOptions(
             base_options=BaseOptions(model_asset_path=model_path),
             running_mode=RunningMode.VIDEO,
         )
-        self.landmarker = PoseLandmarker.create_from_options(options)
+        self.landmarker = PoseLandmarker.create_from_options(self.options)
 
     @staticmethod
     def draw_landmarks(frame, detection_result):
-        for pose_landmarks in detection_result.pose_landmarks:
-            landmarks_proto = landmark_pb2.NormalizedLandmarkList()
-            landmarks_proto.landmark.extend(
-                [
-                    landmark_pb2.NormalizedLandmark(x=lm.x, y=lm.y, z=lm.z)
-                    for lm in pose_landmarks
-                ]
-            )
-            mp.solutions.drawing_utils.draw_landmarks(
+        pose_landmarks_list = detection_result.pose_landmarks
+        for pose_landmarks in pose_landmarks_list:
+            drawing_utils.draw_landmarks(
                 frame,
-                landmarks_proto,
-                mp.solutions.pose.POSE_CONNECTIONS,
-                mp.solutions.drawing_styles.get_default_pose_landmarks_style(),
+                pose_landmarks,
+                PoseLandmarksConnections.POSE_LANDMARKS,
+                drawing_styles.get_default_pose_landmarks_style(),
             )
         return frame
 
@@ -57,7 +51,7 @@ class Skeleton:
                 frame = Camera.frame_crop(frame, self.camera.crop_w, self.camera.crop_h)
 
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+                mp_image = Image(image_format=ImageFormat.SRGB, data=rgb_frame)
                 timestamp_ms = int(time.time() * 1000)
 
                 result = self.landmarker.detect_for_video(mp_image, timestamp_ms)
@@ -73,11 +67,9 @@ class Skeleton:
             self.landmarker.close()
             self.camera.release()
 
-
 def main() -> None:
     skeleton = Skeleton()
     skeleton.run_preview()
-
 
 if __name__ == "__main__":
     main()
