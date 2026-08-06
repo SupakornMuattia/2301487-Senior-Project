@@ -4,7 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-This repository currently contains only planning documents (`README.md`, `Project Proposal.md`) — no source code, build system, or dependencies have been added yet. There are no build, lint, or test commands to run. Update this file once the codebase is scaffolded.
+Early scaffolding stage. Alongside the planning documents (`README.md`, `Project Proposal.md`), the repo now has an initial Python prototype for the camera pipeline:
+
+- `camera_preview.py` — standalone script prototype: opens a webcam via OpenCV, center-crops the feed to a portrait "phone-like" frame (stand-in for a real phone camera before this is ported to Kotlin/CameraX on Android).
+- `main/camera.py` — the same camera-preview logic refactored into a `Camera` class (`open`/`run_preview`/`release`, plus static `parse_args`/`center_crop` helpers). This is the version to build on going forward; `camera_preview.py` is the earlier functional-style draft it was refactored from.
+- `main/activity/`, `main/gait/`, `main/leaning/` — empty directories, presumably placeholders for upcoming TUG-related analysis modules (activity detection, gait analysis, postural leaning). Not yet implemented.
+- `requirements.txt` — currently just `opencv-python` and `numpy`. MediaPipe and Matplotlib from the proposed architecture are not yet added.
+- `venv/` — local virtualenv, gitignored (along with `__pycache__/` and `*.pyc`).
+
+No Flutter/Dart mobile shell exists yet — everything so far is the Python vision-side prototype, run directly (`python main/camera.py` or `python camera_preview.py`), not yet wired into any app or pipeline. There is no build, lint, or test command/framework configured. Update this section as the pose-estimation (MediaPipe) and TUG-metric logic get added under `main/`.
 
 ## Project overview
 
