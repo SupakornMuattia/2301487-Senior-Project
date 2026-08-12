@@ -1,4 +1,3 @@
-import argparse
 import cv2
 
 
@@ -8,6 +7,7 @@ class Camera:
         self.crop_w = crop_w
         self.crop_h = crop_h
         self.cap = None
+        self.landmarker = None
 
     @staticmethod
     def frame_crop(frame, target_w: int, target_h: int):
@@ -58,11 +58,3 @@ class Camera:
                     break
         finally:
             self.release()
-
-
-def main() -> None:
-    camera = Camera(camera=0, crop_w=405, crop_h=720)
-    camera.run_preview()
-
-if __name__ == "__main__":
-    main()
