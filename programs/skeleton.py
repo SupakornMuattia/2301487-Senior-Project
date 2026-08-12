@@ -12,7 +12,7 @@ from mediapipe.tasks.python.vision import (
     drawing_utils,
 )
 
-from camera import Camera
+from programs.camera import Camera
 
 MODEL_PATH = "model\pose_landmarker_full.task"
 
