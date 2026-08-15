@@ -13,7 +13,7 @@ R_KNEE_LANDMARKS = [26]
 L_KNEE_LANDMARKS = [25]
 L_HIP_LANDMARKS = [23]
 R_HIP_LANDMARKS = [24]
-VISIBILITY_THRESHOLD = 0.5
+VISIBILITY_THRESHOLD = 0.65
 
 def check_skeleton(camera):
      if camera.landmarks:
@@ -206,8 +206,6 @@ if __name__ == "__main__":
                if skeleton.draw_enabled and result is not None and result.pose_landmarks:
                     frame = skeleton.draw_landmarks(frame, result)
 
-               # check_arms(camera)
-               # check_legs(camera)
                arm_angles = check_arm_angle(camera, frame)
                lean_points = check_lean(camera, frame)
 
