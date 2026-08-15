@@ -19,7 +19,7 @@ MODEL_PATH = "model\pose_landmarker_full.task"
 class Skeleton:
     def __init__(self, camera: Camera = None, model_path: str = MODEL_PATH):
         self.camera = camera if camera is not None else Camera(0, 405, 720)
-        self.enabled = True
+        self.draw_enabled = True
         self.options = PoseLandmarkerOptions(
             base_options=BaseOptions(model_asset_path=model_path),
             running_mode=RunningMode.VIDEO,
@@ -39,22 +39,17 @@ class Skeleton:
         return frame
 
     def enable(self):
-        self.enabled = True
+        self.draw_enabled = True
 
     def disable(self):
-        self.enabled = False
-        self.camera.landmarker = None
+        self.draw_enabled = False
 
     def detect(self, frame):
-        if not self.enabled:
-            self.camera.landmarker = None
-            return None
-
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = Image(image_format=ImageFormat.SRGB, data=rgb_frame)
         timestamp_ms = int(time.time() * 1000)
         result = self.landmarker.detect_for_video(mp_image, timestamp_ms)
-        self.camera.landmarker = result.pose_landmarks if result.pose_landmarks else None
+        self.camera.landmarks = result.pose_landmarks if result.pose_landmarks else None
         return result
 
     def run_preview(self):
@@ -72,7 +67,7 @@ class Skeleton:
 
                 result = self.detect(frame)
 
-                if result is not None and result.pose_landmarks:
+                if self.draw_enabled and result is not None and result.pose_landmarks:
                     frame = self.draw_landmarks(frame, result)
 
                 cv2.imshow(window_name, frame)

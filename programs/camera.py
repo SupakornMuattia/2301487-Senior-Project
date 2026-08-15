@@ -7,7 +7,7 @@ class Camera:
         self.crop_w = crop_w
         self.crop_h = crop_h
         self.cap = None
-        self.landmarker = None
+        self.landmarks = None
 
     @staticmethod
     def frame_crop(frame, target_w: int, target_h: int):
