@@ -1,5 +1,6 @@
 import time
 import cv2
+import ctypes
 
 from mediapipe.tasks.python.vision.core.image import Image, ImageFormat
 from mediapipe.tasks.python import BaseOptions
@@ -14,7 +15,7 @@ from mediapipe.tasks.python.vision import (
 
 from programs.camera import Camera
 
-MODEL_PATH = "model\pose_landmarker_full.task"
+MODEL_PATH = "model/pose_landmarker_full.task"
 
 class Skeleton:
     def __init__(self, camera: Camera = None, model_path: str = MODEL_PATH):
@@ -52,9 +53,26 @@ class Skeleton:
         self.camera.landmarks = result.pose_landmarks if result.pose_landmarks else None
         return result
 
+    @staticmethod
+    def get_screen_size():
+        """Primary monitor resolution in pixels (Windows)."""
+        user32 = ctypes.windll.user32
+        return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+    
+    @staticmethod
+    def fit_window_to_screen(window_name, frame, margin=0.9):
+        """Resize an existing WINDOW_NORMAL window so frame fills as much of the
+        screen as possible (up to `margin`) while keeping its aspect ratio."""
+        h, w = frame.shape[:2]
+        screen_w, screen_h = Camera.get_screen_size()
+        scale = min(screen_w * margin / w, screen_h * margin / h)
+        cv2.resizeWindow(window_name, int(w * scale), int(h * scale))
+
     def run_preview(self):
         self.camera.open_camera()
         window_name = "Skeleton Preview (q or Esc to quit)"
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        window_sized = False
         try:
             while True:
                 ok, frame = self.camera.cap.read()
@@ -63,7 +81,12 @@ class Skeleton:
                     break
 
                 frame = cv2.flip(frame, 1)
-                frame = Camera.frame_crop(frame, self.camera.crop_w, self.camera.crop_h)
+                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+                # frame = Camera.frame_crop(frame, self.camera.crop_w, self.camera.crop_h)
+                
+                if not window_sized:
+                    self.fit_window_to_screen(window_name, frame)
+                    window_sized = True
 
                 result = self.detect(frame)
 
@@ -78,3 +101,6 @@ class Skeleton:
             self.landmarker.close()
             self.camera.release()
 
+if __name__ == "__main__":
+    skeleton = Skeleton()
+    skeleton.run_preview()

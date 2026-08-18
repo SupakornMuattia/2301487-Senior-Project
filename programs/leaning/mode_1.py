@@ -1,6 +1,6 @@
 import math
 import time
-
+import ctypes
 import cv2
 
 from programs.skeleton import Skeleton
@@ -13,7 +13,7 @@ R_KNEE_LANDMARKS = [26]
 L_KNEE_LANDMARKS = [25]
 L_HIP_LANDMARKS = [23]
 R_HIP_LANDMARKS = [24]
-VISIBILITY_THRESHOLD = 0.65
+VISIBILITY_THRESHOLD = 0.6
 
 def check_skeleton(camera):
      if camera.landmarks:
@@ -80,7 +80,7 @@ def check_arm_angle(camera, frame):
           angles[side] = angle
           cv2.putText(
                frame, f"{angle:.0f} deg", (shoulder_pt[0] + 10, shoulder_pt[1]),
-               cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2,
+               cv2.FONT_HERSHEY_SIMPLEX, 2, color, 2,
           )
 
      # for side, angle in angles.items():
@@ -114,39 +114,82 @@ def check_lean(camera, frame):
 
      return mid_shoulder_pt, mid_hip_pt
 
-def draw_lean_guideline(frame, mid_shoulder_pt, mid_hip_pt, color=(0, 255, 255)):
-     h, w = frame.shape[:2]
+def guideline_x_at_y(mid_shoulder_pt, mid_hip_pt, y):
+     """X coordinate of the shoulder-hip guideline (extended as a straight line) at a given y."""
      x1, y1 = mid_shoulder_pt
      x2, y2 = mid_hip_pt
      dy = y2 - y1
      if dy == 0:
-          return
+          return None
+     return x1 + (y - y1) * (x2 - x1) / dy
 
-     top_x = int(x1 + (0 - y1) * (x2 - x1) / dy)
-     bottom_x = int(x1 + (h - y1) * (x2 - x1) / dy)
-     cv2.line(frame, (top_x, 0), (bottom_x, h), color, 1)
+def draw_lean_guideline(frame, mid_shoulder_pt, mid_hip_pt, color=(0, 255, 255)):
+     h, w = frame.shape[:2]
+     top_x = guideline_x_at_y(mid_shoulder_pt, mid_hip_pt, 0)
+     bottom_x = guideline_x_at_y(mid_shoulder_pt, mid_hip_pt, h)
+     if top_x is None:
+          return
+     cv2.line(frame, (int(top_x), 0), (int(bottom_x), h), color, 1)
+
+def _hip_sides(camera, frame, static_points):
+     """Per-hip (x - guideline_x) sign at each hip's current position, keyed by 'left'/'right'.
+     Returns None unless both hips are visible, since the check requires both to be tracked."""
+     check = check_skeleton(camera)
+     if not check or static_points is None:
+          return None
+
+     pose_landmarks = camera.landmarks[0]
+     h, w = frame.shape[:2]
+     mid_shoulder_pt, mid_hip_pt = static_points
+
+     sides = {}
+     for side_name, idx in (("left", L_HIP_LANDMARKS[0]), ("right", R_HIP_LANDMARKS[0])):
+          hip = pose_landmarks[idx]
+          if hip.visibility < VISIBILITY_THRESHOLD:
+               return None
+          hip_pt = (int(hip.x * w), int(hip.y * h))
+          guide_x = guideline_x_at_y(mid_shoulder_pt, mid_hip_pt, hip_pt[1])
+          if guide_x is None:
+               return None
+          sides[side_name] = 1 if hip_pt[0] - guide_x >= 0 else -1
+     return sides
+
+def capture_hip_sides(camera, frame, static_points):
+     """Call once, right when the static guideline is frozen, to record each hip's starting side."""
+     return _hip_sides(camera, frame, static_points)
+
+def check_hip_behind(camera, frame, static_points, static_hip_sides):
+     """True if both hips are still on their original (calibration-time) side of the static
+     guideline, False if either has crossed to the other side ("pulled back"), None if the check
+     isn't active (guideline not yet frozen, or a hip isn't currently visible)."""
+     if static_hip_sides is None:
+          return None
+     current_sides = _hip_sides(camera, frame, static_points)
+     if current_sides is None:
+          return None
+     return all(current_sides[side] == static_hip_sides[side] for side in static_hip_sides)
 
 def draw_message(frame, text):
      h, w = frame.shape[:2]
-     size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 3)
+     size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 3, 3)
      pt = ((w - size[0]) // 2, h // 4)
-     cv2.putText(frame, text, pt, cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
+     cv2.putText(frame, text, pt, cv2.FONT_HERSHEY_SIMPLEX, 3, (0, 0, 255), 3)
 
 def draw_indicator(frame, text, seen, row=0):
      h, w = frame.shape[:2]
      color = (0, 200, 0) if seen else (0, 0, 255)
      margin = 15
-     dot_radius = 8
-     line_height = 35
+     dot_radius = 20
+     line_height = 100
 
-     size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+     size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 3, 2)
      text_x = w - margin - size[0]
      text_y = margin + size[1] + row * line_height
      dot_x = text_x - margin - dot_radius
      dot_y = text_y - size[1] // 2
 
      cv2.circle(frame, (dot_x, dot_y), dot_radius, color, -1)
-     cv2.putText(frame, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+     cv2.putText(frame, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 3, color, 2)
 
 def draw_arms_indicator(frame, confirmed):
      draw_indicator(frame, "arms", confirmed, row=0)
@@ -156,6 +199,9 @@ def draw_legs_indicator(frame, confirmed):
 
 def draw_angle_indicator(frame, confirmed):
      draw_indicator(frame, "angle", confirmed, row=2)
+
+def draw_hip_indicator(frame, confirmed):
+     draw_indicator(frame, "hip", confirmed, row=3)
 
 ARM_ANGLE_MIN = 80
 ARM_ANGLE_MAX = 95
@@ -183,6 +229,19 @@ def check_legs(camera):
      else:
           return False
 
+def get_screen_size():
+     """Primary monitor resolution in pixels (Windows)."""
+     user32 = ctypes.windll.user32
+     return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+
+def fit_window_to_screen(window_name, frame, margin=0.9):
+     """Resize an existing WINDOW_NORMAL window so frame fills as much of the
+     screen as possible (up to `margin`) while keeping its aspect ratio."""
+     h, w = frame.shape[:2]
+     screen_w, screen_h = Camera.get_screen_size()
+     scale = min(screen_w * margin / w, screen_h * margin / h)
+     cv2.resizeWindow(window_name, int(w * scale), int(h * scale))
+
 if __name__ == "__main__":
      camera = Camera(camera=0, crop_w=405, crop_h=720)
      skeleton = Skeleton(camera)
@@ -190,17 +249,25 @@ if __name__ == "__main__":
      state = "wait_arms"
      countdown_start = None
      static_points = None
+     static_hip_sides = None
 
      camera.open_camera()
      try:
           while True:
                ok, frame = camera.cap.read()
+               window_name = "Camera Preview (q or Esc to quit)"
+               cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+               window_sized = False
                if not ok:
                     print("Failed to read frame from camera")
                     break
 
                frame = cv2.flip(frame, 1)
-               frame = Camera.frame_crop(frame, camera.crop_w, camera.crop_h)
+               frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+               if not window_sized:
+                    fit_window_to_screen(window_name, frame)
+                    window_sized = True
+               # frame = Camera.frame_crop(frame, camera.crop_w, camera.crop_h)
 
                result = skeleton.detect(frame)
                if skeleton.draw_enabled and result is not None and result.pose_landmarks:
@@ -208,6 +275,7 @@ if __name__ == "__main__":
 
                arm_angles = check_arm_angle(camera, frame)
                lean_points = check_lean(camera, frame)
+               hip_ok = check_hip_behind(camera, frame, static_points, static_hip_sides)
 
                if state == "wait_arms":
                     draw_message(frame, "see your arms")
@@ -264,6 +332,7 @@ if __name__ == "__main__":
                          if remaining <= 0:
                               state = "done"
                               static_points = lean_points
+                              static_hip_sides = capture_hip_sides(camera, frame, static_points)
                          else:
                               draw_message(frame, str(remaining))
                elif state == "done":
@@ -271,15 +340,19 @@ if __name__ == "__main__":
                          draw_lean_guideline(frame, *static_points, color=(0, 255, 255))
                     if lean_points is not None:
                          draw_lean_guideline(frame, *lean_points, color=(255, 0, 255))
+                    if hip_ok is False:
+                         draw_message(frame, "hip pulled back")
 
                arms_confirmed = state not in ("wait_arms", "countdown_arms")
                legs_confirmed = state not in ("wait_arms", "countdown_arms", "wait_legs", "countdown_legs")
                angle_confirmed = state == "done"
+               hip_confirmed = state == "done" and hip_ok is True
                draw_arms_indicator(frame, arms_confirmed)
                draw_legs_indicator(frame, legs_confirmed)
                draw_angle_indicator(frame, angle_confirmed)
+               draw_hip_indicator(frame, hip_confirmed)
 
-               cv2.imshow("Frame", frame)
+               cv2.imshow(window_name, frame)
                key = cv2.waitKey(1) & 0xFF
                if key in (ord("q"), 27):  # 27 = Esc
                     break

@@ -1,4 +1,8 @@
+import ctypes
+
 import cv2
+
+url = "https://192.168.1.28:8080/video"
 
 
 class Camera:
@@ -19,10 +23,10 @@ class Camera:
         return frame[y0 : y0 + crop_h, x0 : x0 + crop_w]
 
     def open_camera(self):
-        self.cap = cv2.VideoCapture(self.camera, cv2.CAP_DSHOW)
+        self.cap = cv2.VideoCapture(url)
         
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
         if not self.cap.isOpened():
             raise RuntimeError(f"Could not open camera index {self.camera}")
@@ -39,9 +43,26 @@ class Camera:
             self.cap = None
         cv2.destroyAllWindows()
 
+    @staticmethod
+    def get_screen_size():
+        """Primary monitor resolution in pixels (Windows)."""
+        user32 = ctypes.windll.user32
+        return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+
+    @staticmethod
+    def fit_window_to_screen(window_name, frame, margin=0.9):
+        """Resize an existing WINDOW_NORMAL window so frame fills as much of the
+        screen as possible (up to `margin`) while keeping its aspect ratio."""
+        h, w = frame.shape[:2]
+        screen_w, screen_h = Camera.get_screen_size()
+        scale = min(screen_w * margin / w, screen_h * margin / h)
+        cv2.resizeWindow(window_name, int(w * scale), int(h * scale))
+
     def run_preview(self):
         self.open_camera()
         window_name = "Camera Preview (q or Esc to quit)"
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        window_sized = False
         try:
             while True:
                 ok, frame = self.cap.read()
@@ -50,7 +71,12 @@ class Camera:
                     break
 
                 frame = cv2.flip(frame, 1)
-                frame = self.frame_crop(frame, self.crop_w, self.crop_h)
+                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+                # frame = self.frame_crop(frame, self.crop_w, self.crop_h)
+
+                if not window_sized:
+                    self.fit_window_to_screen(window_name, frame)
+                    window_sized = True
 
                 cv2.imshow(window_name, frame)
                 key = cv2.waitKey(1) & 0xFF
@@ -58,3 +84,7 @@ class Camera:
                     break
         finally:
             self.release()
+
+if __name__ == "__main__":
+    camera = Camera()
+    camera.run_preview()
