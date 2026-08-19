@@ -3,6 +3,7 @@ import ctypes
 import cv2
 
 url = "https://192.168.1.28:8080/video"
+url_2 = "https://10.99.27.126:8080/video"
 
 
 class Camera:
@@ -12,6 +13,7 @@ class Camera:
         self.crop_h = crop_h
         self.cap = None
         self.landmarks = None
+        self.face_landmarks = None
 
     @staticmethod
     def frame_crop(frame, target_w: int, target_h: int):
@@ -71,7 +73,7 @@ class Camera:
                     break
 
                 frame = cv2.flip(frame, 1)
-                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+                # frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
                 # frame = self.frame_crop(frame, self.crop_w, self.crop_h)
 
                 if not window_sized:
