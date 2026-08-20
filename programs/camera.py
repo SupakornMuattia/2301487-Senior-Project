@@ -2,8 +2,8 @@ import ctypes
 
 import cv2
 
-url = "https://192.168.1.28:8080/video"
-url_2 = "https://10.99.27.126:8080/video"
+url_2 = "https://192.168.1.28:8080/video"
+url = "https://10.99.27.126:8080/video"
 
 
 class Camera:

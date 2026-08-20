@@ -2,6 +2,7 @@ import math
 import time
 import cv2
 import ctypes
+from collections import deque
 
 from mediapipe.tasks.python.vision.core.image import Image, ImageFormat
 from mediapipe.tasks.python import BaseOptions
@@ -28,6 +29,89 @@ LEFT_IRIS_CENTER = 473
 
 REAL_IPD_CM = 6.3  # average adult interpupillary distance
 
+MEDIAN_WINDOW = 5  # frames considered per landmark when rejecting outlier spikes
+EMA_ALPHA = 0.3  # higher = more responsive/less smooth, lower = smoother/more lag
+
+
+class SmoothedLandmark:
+    """Duck-types a MediaPipe NormalizedLandmark (x/y/z/visibility/presence) so
+    smoothed output is a drop-in replacement wherever raw landmarks are
+    consumed, including mediapipe's own drawing_utils."""
+
+    __slots__ = ("x", "y", "z", "visibility", "presence")
+
+    def __init__(self, x, y, z, visibility, presence):
+        self.x = x
+        self.y = y
+        self.z = z
+        self.visibility = visibility
+        self.presence = presence
+
+
+class LandmarkSmoother:
+    """Per-landmark median filter (rejects single-frame outlier spikes) feeding
+    into an exponential moving average (smooths the remaining jitter)."""
+
+    def __init__(self, median_window: int = MEDIAN_WINDOW, alpha: float = EMA_ALPHA):
+        if median_window < 1:
+            raise ValueError("median_window must be >= 1")
+        if not 0.0 < alpha <= 1.0:
+            raise ValueError("alpha must be in (0, 1]")
+        self.median_window = median_window
+        self.alpha = alpha
+        self.history = None  # list[deque] of (x, y, z, visibility, presence), one deque per landmark
+        self.ema = None  # list[x, y, z, visibility, presence], one per landmark
+
+    def reset(self):
+        """Drop buffered frames, e.g. when tracking is lost, so the next
+        detection isn't blended against stale positions."""
+        self.history = None
+        self.ema = None
+
+    @staticmethod
+    def _median(values):
+        ordered = sorted(values)
+        return ordered[len(ordered) // 2]
+
+    def smooth(self, pose_landmarks):
+        """pose_landmarks: a single pose's landmark list (each item exposing
+        .x/.y/.z/.visibility), as in `camera.landmarks[0]`. Returns a new list
+        of the same length, median-filtered then EMA-smoothed, or None if no
+        landmarks were given."""
+        if not pose_landmarks:
+            return None
+
+        count = len(pose_landmarks)
+        if self.history is None or len(self.history) != count:
+            self.history = [deque(maxlen=self.median_window) for _ in range(count)]
+            self.ema = [None] * count
+
+        smoothed = []
+        for i, lm in enumerate(pose_landmarks):
+            presence = lm.presence if lm.presence is not None else 1.0
+            self.history[i].append((lm.x, lm.y, lm.z, lm.visibility, presence))
+            med_x = self._median(v[0] for v in self.history[i])
+            med_y = self._median(v[1] for v in self.history[i])
+            med_z = self._median(v[2] for v in self.history[i])
+            med_v = self._median(v[3] for v in self.history[i])
+            med_p = self._median(v[4] for v in self.history[i])
+
+            if self.ema[i] is None:
+                self.ema[i] = [med_x, med_y, med_z, med_v, med_p]
+            else:
+                prev = self.ema[i]
+                a = self.alpha
+                self.ema[i] = [
+                    a * med_x + (1 - a) * prev[0],
+                    a * med_y + (1 - a) * prev[1],
+                    a * med_z + (1 - a) * prev[2],
+                    a * med_v + (1 - a) * prev[3],
+                    a * med_p + (1 - a) * prev[4],
+                ]
+            smoothed.append(SmoothedLandmark(*self.ema[i]))
+        return smoothed
+
+
 class Skeleton:
     def __init__(
         self,
@@ -37,9 +121,13 @@ class Skeleton:
         frame_width: int = 1280,
         real_ipd_cm: float = REAL_IPD_CM,
         calibration_facing: str = "front",
+        median_window: int = MEDIAN_WINDOW,
+        ema_alpha: float = EMA_ALPHA,
     ):
         self.camera = camera if camera is not None else Camera(0, 720, 1280)
         self.draw_enabled = True
+        self.smoothing_enabled = True
+        self.landmark_smoother = LandmarkSmoother(median_window, ema_alpha)
         self.options = PoseLandmarkerOptions(
             base_options=BaseOptions(model_asset_path=model_path),
             running_mode=RunningMode.VIDEO,
@@ -70,6 +158,24 @@ class Skeleton:
                 pose_landmarks,
                 PoseLandmarksConnections.POSE_LANDMARKS,
                 drawing_styles.get_default_pose_landmarks_style(),
+            )
+        return frame
+
+    SMOOTHED_DRAWING_SPEC = drawing_utils.DrawingSpec(color=(255, 0, 255), thickness=2, circle_radius=2)
+
+    def draw_smoothed_landmarks(self, frame):
+        """Draws camera.landmarks (post median-filter + EMA) in magenta, so it
+        can be visually compared against the raw (green) overlay from
+        draw_landmarks while tuning median_window/ema_alpha."""
+        if not self.camera.landmarks:
+            return frame
+        for pose_landmarks in self.camera.landmarks:
+            drawing_utils.draw_landmarks(
+                frame,
+                pose_landmarks,
+                PoseLandmarksConnections.POSE_LANDMARKS,
+                self.SMOOTHED_DRAWING_SPEC,
+                self.SMOOTHED_DRAWING_SPEC,
             )
         return frame
 
@@ -106,12 +212,32 @@ class Skeleton:
     def disable(self):
         self.draw_enabled = False
 
+    def enable_smoothing(self):
+        self.smoothing_enabled = True
+
+    def disable_smoothing(self):
+        self.smoothing_enabled = False
+        self.landmark_smoother.reset()
+
+    def toggle_smoothing(self):
+        if self.smoothing_enabled:
+            self.disable_smoothing()
+        else:
+            self.enable_smoothing()
+
     def detect(self, frame):
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = Image(image_format=ImageFormat.SRGB, data=rgb_frame)
         timestamp_ms = int(time.time() * 1000)
         result = self.landmarker.detect_for_video(mp_image, timestamp_ms)
-        self.camera.landmarks = result.pose_landmarks if result.pose_landmarks else None
+        if not result.pose_landmarks:
+            self.landmark_smoother.reset()
+            self.camera.landmarks = None
+        elif self.smoothing_enabled:
+            self.camera.landmarks = [self.landmark_smoother.smooth(result.pose_landmarks[0])]
+        else:
+            self.landmark_smoother.reset()
+            self.camera.landmarks = result.pose_landmarks
         return result
 
     def detect_face(self, frame):
@@ -183,8 +309,16 @@ class Skeleton:
 
                 if self.draw_enabled and result is not None and result.pose_landmarks:
                     frame = self.draw_landmarks(frame, result)
+                    if self.smoothing_enabled:
+                        frame = self.draw_smoothed_landmarks(frame)
                 if self.draw_enabled and face_result is not None and face_result.face_landmarks:
                     frame = self.draw_face_landmarks(frame, face_result)
+
+                cv2.putText(
+                    frame, f"smoothing: {'on' if self.smoothing_enabled else 'off'} (m to toggle)",
+                    (10, frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                    (255, 0, 255) if self.smoothing_enabled else (0, 0, 255), 2,
+                )
 
                 ipd_px = self.get_ipd_px(self.camera.face_landmarks, frame.shape)
                 if ipd_px is not None:
@@ -203,6 +337,8 @@ class Skeleton:
                 key = cv2.waitKey(1) & 0xFF
                 if key in (ord("q"), 27):  # 27 = Esc
                     break
+                elif key == ord("m"):  # toggle median+EMA smoothing
+                    self.toggle_smoothing()
         finally:
             self.landmarker.close()
             self.face_landmarker.close()

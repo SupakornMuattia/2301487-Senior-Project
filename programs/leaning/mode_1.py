@@ -263,7 +263,7 @@ if __name__ == "__main__":
                     break
 
                frame = cv2.flip(frame, 1)
-               frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+               # frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
                if not window_sized:
                     fit_window_to_screen(window_name, frame)
                     window_sized = True
@@ -272,6 +272,12 @@ if __name__ == "__main__":
                result = skeleton.detect(frame)
                if skeleton.draw_enabled and result is not None and result.pose_landmarks:
                     frame = skeleton.draw_landmarks(frame, result)
+
+               cv2.putText(
+                    frame, f"smoothing: {'on' if skeleton.smoothing_enabled else 'off'} (m to toggle)",
+                    (10, frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                    (255, 0, 255) if skeleton.smoothing_enabled else (0, 0, 255), 2,
+               )
 
                arm_angles = check_arm_angle(camera, frame)
                lean_points = check_lean(camera, frame)
@@ -358,6 +364,8 @@ if __name__ == "__main__":
                     break
                elif key == ord("t"):  # toggle landmark drawing
                     skeleton.disable() if skeleton.draw_enabled else skeleton.enable()
+               elif key == ord("m"):  # toggle median+EMA smoothing
+                    skeleton.toggle_smoothing()
      finally:
           skeleton.landmarker.close()
           camera.release()
