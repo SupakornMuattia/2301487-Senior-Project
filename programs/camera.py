@@ -2,12 +2,12 @@ import ctypes
 
 import cv2
 
-url_2 = "https://192.168.1.28:8080/video"
-url = "https://10.99.27.126:8080/video"
+url = "https://192.168.1.28:8080/video"
+url_2 = "https://10.99.27.126:8080/video"
 
 
 class Camera:
-    def __init__(self, camera: int = 0, crop_w: int = 405, crop_h: int = 720):
+    def __init__(self, camera: int = 0, crop_w: int = 720, crop_h: int = 1280):
         self.camera = camera
         self.crop_w = crop_w
         self.crop_h = crop_h

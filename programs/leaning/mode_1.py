@@ -14,6 +14,18 @@ L_KNEE_LANDMARKS = [25]
 L_HIP_LANDMARKS = [23]
 R_HIP_LANDMARKS = [24]
 VISIBILITY_THRESHOLD = 0.6
+DISTANCE_MIN_CM = 100
+DISTANCE_MAX_CM = 200
+
+def check_distance(skeleton, camera, frame):
+     face_result = skeleton.detect_face(frame)
+     if skeleton.draw_enabled and face_result is not None and face_result.face_landmarks:
+          skeleton.draw_face_landmarks(frame, face_result)
+     ipd_px = skeleton.get_ipd_px(camera.face_landmarks, frame.shape)
+     return skeleton.get_distance_cm(ipd_px)
+
+def distance_in_range(distance_cm):
+     return distance_cm is not None and DISTANCE_MIN_CM <= distance_cm <= DISTANCE_MAX_CM
 
 def check_skeleton(camera):
      if camera.landmarks:
@@ -171,37 +183,40 @@ def check_hip_behind(camera, frame, static_points, static_hip_sides):
 
 def draw_message(frame, text):
      h, w = frame.shape[:2]
-     size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 3, 3)
+     size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.5, 3)
      pt = ((w - size[0]) // 2, h // 4)
-     cv2.putText(frame, text, pt, cv2.FONT_HERSHEY_SIMPLEX, 3, (0, 0, 255), 3)
+     cv2.putText(frame, text, pt, cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3)
 
 def draw_indicator(frame, text, seen, row=0):
      h, w = frame.shape[:2]
      color = (0, 200, 0) if seen else (0, 0, 255)
      margin = 15
-     dot_radius = 20
-     line_height = 100
+     dot_radius = 10
+     line_height = 50
 
-     size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 3, 2)
+     size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.5, 2)
      text_x = w - margin - size[0]
      text_y = margin + size[1] + row * line_height
      dot_x = text_x - margin - dot_radius
      dot_y = text_y - size[1] // 2
 
      cv2.circle(frame, (dot_x, dot_y), dot_radius, color, -1)
-     cv2.putText(frame, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 3, color, 2)
+     cv2.putText(frame, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 1.5, color, 2)
+
+def draw_distance_indicator(frame, confirmed):
+     draw_indicator(frame, "distance", confirmed, row=0)
 
 def draw_arms_indicator(frame, confirmed):
-     draw_indicator(frame, "arms", confirmed, row=0)
+     draw_indicator(frame, "arms", confirmed, row=1)
 
 def draw_legs_indicator(frame, confirmed):
-     draw_indicator(frame, "legs", confirmed, row=1)
+     draw_indicator(frame, "legs", confirmed, row=2)
 
 def draw_angle_indicator(frame, confirmed):
-     draw_indicator(frame, "angle", confirmed, row=2)
+     draw_indicator(frame, "angle", confirmed, row=3)
 
 def draw_hip_indicator(frame, confirmed):
-     draw_indicator(frame, "hip", confirmed, row=3)
+     draw_indicator(frame, "hip", confirmed, row=4)
 
 ARM_ANGLE_MIN = 80
 ARM_ANGLE_MAX = 95
@@ -246,7 +261,7 @@ if __name__ == "__main__":
      camera = Camera(camera=0, crop_w=405, crop_h=720)
      skeleton = Skeleton(camera)
 
-     state = "wait_arms"
+     state = "wait_distance"
      countdown_start = None
      static_points = None
      static_hip_sides = None
@@ -283,7 +298,33 @@ if __name__ == "__main__":
                lean_points = check_lean(camera, frame)
                hip_ok = check_hip_behind(camera, frame, static_points, static_hip_sides)
 
-               if state == "wait_arms":
+               if state == "wait_distance":
+                    distance_cm = check_distance(skeleton, camera, frame)
+                    if distance_cm is not None:
+                         cv2.putText(
+                              frame, f"distance: {distance_cm:.0f}cm", (10, 40),
+                              cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2,
+                         )
+                    draw_message(frame, "stand 100-200cm from camera")
+                    if distance_in_range(distance_cm):
+                         state = "countdown_distance"
+                         countdown_start = time.time()
+               elif state == "countdown_distance":
+                    distance_cm = check_distance(skeleton, camera, frame)
+                    if distance_cm is not None:
+                         cv2.putText(
+                              frame, f"distance: {distance_cm:.0f}cm", (10, 40),
+                              cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2,
+                         )
+                    if not distance_in_range(distance_cm):
+                         state = "wait_distance"
+                    else:
+                         remaining = 3 - int(time.time() - countdown_start)
+                         if remaining <= 0:
+                              state = "wait_arms"
+                         else:
+                              draw_message(frame, str(remaining))
+               elif state == "wait_arms":
                     draw_message(frame, "see your arms")
                     if check_arms(camera):
                          state = "countdown_arms"
@@ -349,10 +390,14 @@ if __name__ == "__main__":
                     if hip_ok is False:
                          draw_message(frame, "hip pulled back")
 
-               arms_confirmed = state not in ("wait_arms", "countdown_arms")
-               legs_confirmed = state not in ("wait_arms", "countdown_arms", "wait_legs", "countdown_legs")
+               distance_confirmed = state not in ("wait_distance", "countdown_distance")
+               arms_confirmed = state not in ("wait_distance", "countdown_distance", "wait_arms", "countdown_arms")
+               legs_confirmed = state not in (
+                    "wait_distance", "countdown_distance", "wait_arms", "countdown_arms", "wait_legs", "countdown_legs",
+               )
                angle_confirmed = state == "done"
                hip_confirmed = state == "done" and hip_ok is True
+               draw_distance_indicator(frame, distance_confirmed)
                draw_arms_indicator(frame, arms_confirmed)
                draw_legs_indicator(frame, legs_confirmed)
                draw_angle_indicator(frame, angle_confirmed)
