@@ -55,8 +55,6 @@ def check_arms(camera):
                pose_landmarks[i].visibility >= VISIBILITY_THRESHOLD
                for i in L_ARM_LANDMARKS
           )
-          if right_arms or left_arms:
-               print("I see arms")
           return right_arms or left_arms
      else:
           return False
@@ -243,11 +241,11 @@ def reach_distance_cm(current_x_px, start_x_px, distance_cm, focal_length_px):
           return None
      return abs(current_x_px - start_x_px) * distance_cm / focal_length_px
 
-REACH_STILLNESS_TOLERANCE_CM = 3  # max wrist drift allowed during the hold, in real-world cm
-REACH_HOLD_SECONDS = 3.0  # how long the wrist must stay still before the reach is locked in
+REACH_STILLNESS_TOLERANCE_CM = 2  # max wrist drift allowed during the hold, in real-world cm
+REACH_HOLD_SECONDS = 2.0  # how long the wrist must stay still before the reach is locked in
 KNEE_ANGLE_MIN_DEG = 160  # hip-knee-ankle vertex angle below this counts as a bent knee
 KNEE_ANGLE_MAX_DEG = 180  # a straight leg reads ~180 degrees at the knee vertex
-HIP_SHIFT_TOLERANCE_CM = 8  # max absolute hip shift from baseline before it counts as a footstep
+ANKLE_DISTANCE_MAX_CM = 10  # ankle-to-ankle distance beyond this counts as a footstep
 TRUNK_ROTATION_TOLERANCE_RATIO = 0.15  # max fractional change in shoulder-to-shoulder width before it counts as trunk rotation
 
 def wrist_still_px(current_x_px, anchor_x_px, distance_cm, focal_length_px):
@@ -270,8 +268,6 @@ def check_legs(camera):
                pose_landmarks[i].visibility >= VISIBILITY_THRESHOLD
                for i in L_LEGS_LANDMARKS
           )
-          if right_legs or left_legs:
-               print("I see legs")
           return right_legs or left_legs
      else:
           return False
@@ -296,6 +292,17 @@ def draw_leg_lines(frame, points, color=(0, 255, 255)):
      cv2.line(frame, (int(hip_pt[0]), int(hip_pt[1])), (int(knee_pt[0]), int(knee_pt[1])), color, 10)
      cv2.line(frame, (int(knee_pt[0]), int(knee_pt[1])), (int(ankle_pt[0]), int(ankle_pt[1])), color, 10)
 
+def draw_ankle_line(frame, l_ankle_pt, r_ankle_pt, distance_cm_value, color=(0, 255, 0)):
+     l_pt = (int(l_ankle_pt[0]), int(l_ankle_pt[1]))
+     r_pt = (int(r_ankle_pt[0]), int(r_ankle_pt[1]))
+     cv2.line(frame, l_pt, r_pt, color, 4)
+     if distance_cm_value is not None:
+          mid_pt = ((l_pt[0] + r_pt[0]) // 2, (l_pt[1] + r_pt[1]) // 2)
+          cv2.putText(
+               frame, f"{distance_cm_value:.1f}cm", (mid_pt[0], mid_pt[1] - 15),
+               cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2,
+          )
+
 def knee_vertex_angle(points):
      """Angle (degrees) at the knee vertex between the hip and the ankle - i.e. the actual
      hip-knee-ankle knee flexion angle. ~180 degrees is a straight leg."""
@@ -307,17 +314,44 @@ def knee_vertex_angle(points):
 def knee_straight(angle_deg):
      return angle_deg is None or KNEE_ANGLE_MIN_DEG <= angle_deg <= KNEE_ANGLE_MAX_DEG
 
-def hip_shift_cm(static_points, current_points, distance_cm, focal_length_px):
-     """Absolute horizontal shift (cm) of the hip itself relative to baseline. A large
-     shift means the whole body translated - i.e. a footstep, not just a lean."""
-     if None in (static_points, current_points, distance_cm, focal_length_px):
-          return None
-     static_hip_pt, _, _ = static_points
-     current_hip_pt, _, _ = current_points
-     return abs(current_hip_pt[0] - static_hip_pt[0]) * distance_cm / focal_length_px
+# def hip_shift_cm(static_points, current_points, distance_cm, focal_length_px):
+#      """Absolute horizontal shift (cm) of the hip itself relative to baseline. A large
+#      shift means the whole body translated - i.e. a footstep, not just a lean."""
+#      if None in (static_points, current_points, distance_cm, focal_length_px):
+#           return None
+#      static_hip_pt, _, _ = static_points
+#      current_hip_pt, _, _ = current_points
+#      return abs(current_hip_pt[0] - static_hip_pt[0]) * distance_cm / focal_length_px
 
-def footstep_detected(hip_shift_cm_value):
-     return hip_shift_cm_value is not None and hip_shift_cm_value > HIP_SHIFT_TOLERANCE_CM
+def ankle_points_px(camera, frame):
+     """Current (left_ankle_pt, right_ankle_pt) pixel points, or None if not tracked/visible."""
+     check = check_skeleton(camera)
+     if not check:
+          return None
+     pose_landmarks = camera.landmarks[0]
+     l_ankle = pose_landmarks[L_LEGS_LANDMARKS[2]]
+     r_ankle = pose_landmarks[R_LEGS_LANDMARKS[2]]
+     if min(l_ankle.visibility, r_ankle.visibility) < VISIBILITY_THRESHOLD:
+          return None
+     h, w = frame.shape[:2]
+     return (l_ankle.x * w, l_ankle.y * h), (r_ankle.x * w, r_ankle.y * h)
+
+def ankle_distance_px(camera, frame):
+     """Current pixel distance between the left and right ankle (stance width)."""
+     points = ankle_points_px(camera, frame)
+     if points is None:
+          return None
+     l_pt, r_pt = points
+     return math.hypot(l_pt[0] - r_pt[0], l_pt[1] - r_pt[1])
+
+def ankle_distance_cm(ankle_distance_px_value, distance_cm, focal_length_px):
+     """Current ankle-to-ankle distance (cm) via the pinhole model."""
+     if None in (ankle_distance_px_value, distance_cm, focal_length_px):
+          return None
+     return ankle_distance_px_value * distance_cm / focal_length_px
+
+def footstep_detected(ankle_distance_cm_value):
+     return ankle_distance_cm_value is not None and ankle_distance_cm_value > ANKLE_DISTANCE_MAX_CM
 
 def shoulder_width_px(camera, frame):
      """Current shoulder-to-shoulder pixel distance, or None if not tracked/visible."""
@@ -399,7 +433,15 @@ if __name__ == "__main__":
                )
 
                arm_angles = check_arm_angle(camera, frame)
-               lean_points = check_lean(camera, frame)
+               # lean_points = check_lean(camera, frame)
+
+               ankle_pts = ankle_points_px(camera, frame)
+               live_ankle_distance_cm = None
+               if ankle_pts is not None:
+                    l_ankle_pt, r_ankle_pt = ankle_pts
+                    live_ankle_distance_px = math.hypot(l_ankle_pt[0] - r_ankle_pt[0], l_ankle_pt[1] - r_ankle_pt[1])
+                    live_ankle_distance_cm = ankle_distance_cm(live_ankle_distance_px, captured_distance_cm, skeleton.focal_length_px)
+                    draw_ankle_line(frame, l_ankle_pt, r_ankle_pt, live_ankle_distance_cm)
 
                if state == "wait_distance":
                     distance_cm = check_distance(skeleton, camera, frame)
@@ -439,7 +481,7 @@ if __name__ == "__main__":
                     if not check_arms(camera):
                          state = "wait_arms"
                     else:
-                         remaining = 3 - int(time.time() - countdown_start)
+                         remaining = 1 - int(time.time() - countdown_start)
                          if remaining <= 0:
                               state = "wait_legs"
                          else:
@@ -458,7 +500,7 @@ if __name__ == "__main__":
                     elif not check_legs(camera):
                          state = "wait_legs"
                     else:
-                         remaining = 3 - int(time.time() - countdown_start)
+                         remaining = 1 - int(time.time() - countdown_start)
                          if remaining <= 0:
                               state = "wait_angle"
                          else:
@@ -484,7 +526,7 @@ if __name__ == "__main__":
                          remaining = 3 - int(time.time() - countdown_start)
                          if remaining <= 0:
                               state = "done"
-                              static_points = lean_points
+                              # static_points = lean_points
                               reach_side = reach_side_from_angles(arm_angles)
                               reach_start_x_px = wrist_x_px(camera, frame, reach_side)
                               static_leg_points = leg_points_px(camera, frame, opposite_side(reach_side))
@@ -500,12 +542,9 @@ if __name__ == "__main__":
                     knee_angle = knee_vertex_angle(current_leg_points)
                     if knee_angle is not None:
                          print(f"knee angle: {knee_angle:.1f} deg")
-                    hip_shift = hip_shift_cm(
-                         static_leg_points, current_leg_points, captured_distance_cm, skeleton.focal_length_px,
-                    )
                     knee_ok = knee_straight(knee_angle)
-                    step_ok = not footstep_detected(hip_shift)
-                    rotation_ok = not trunk_rotated(current_shoulder_width_px, static_shoulder_width_px)
+                    step_ok = not footstep_detected(live_ankle_distance_cm)
+                    # rotation_ok = not trunk_rotated(current_shoulder_width_px, static_shoulder_width_px)
                     arm_ok = arm_angle_maintained(arm_angles, reach_side)
 
                     if not arm_ok:
@@ -515,8 +554,8 @@ if __name__ == "__main__":
                          reach_still_anchor_x_px = None
                          reach_still_start = None
                          draw_message(frame, "arm dropped - hold arm at 90 degrees")
-                    elif not (knee_ok and step_ok and rotation_ok):
-                         reason = "knee bent" if not knee_ok else ("footstep" if not step_ok else "trunk rotation")
+                    elif not (knee_ok and step_ok):
+                         reason = "knee bent" if not knee_ok else "footstep"
                          print(f"Reach invalidated ({reason}); repositioning")
                          state = "ready"
                          countdown_start = time.time()
@@ -525,10 +564,10 @@ if __name__ == "__main__":
                          reach_still_start = None
                          draw_message(frame, f"{reason} detected - repositioning")
                     else:
-                         if static_points is not None:
-                              draw_lean_guideline(frame, *static_points, color=(0, 255, 255))
-                         if lean_points is not None:
-                              draw_lean_guideline(frame, *lean_points, color=(255, 0, 255))
+                         # if static_points is not None:
+                         #      draw_lean_guideline(frame, *static_points, color=(0, 255, 255))
+                         # if lean_points is not None:
+                         #      draw_lean_guideline(frame, *lean_points, color=(255, 0, 255))
                          if static_leg_points is not None:
                               draw_leg_lines(frame, static_leg_points, color=(255, 255, 0))
                          if current_leg_points is not None:
@@ -564,22 +603,22 @@ if __name__ == "__main__":
                          else:
                               reach_still_anchor_x_px = None
                elif state == "ready":
-                    if static_points is not None:
-                         draw_lean_guideline(frame, *static_points, color=(0, 255, 255))
+                    # if static_points is not None:
+                    #      draw_lean_guideline(frame, *static_points, color=(0, 255, 255))
                     if static_leg_points is not None:
                          draw_leg_lines(frame, static_leg_points, color=(0, 255, 255))
                     remaining = 3 - int(time.time() - countdown_start)
                     if remaining <= 0:
                          state = "done"
-                         static_points = lean_points
+                         # static_points = lean_points
                          static_leg_points = leg_points_px(camera, frame, opposite_side(reach_side))
                          static_shoulder_width_px = shoulder_width_px(camera, frame)
                          reach_start_x_px = wrist_x_px(camera, frame, reach_side)
                     else:
                          draw_message(frame, f"reposition... {remaining}")
                elif state == "finished":
-                    if static_points is not None:
-                         draw_lean_guideline(frame, *static_points, color=(0, 255, 255))
+                    # if static_points is not None:
+                    #      draw_lean_guideline(frame, *static_points, color=(0, 255, 255))
                     if static_leg_points is not None:
                          draw_leg_lines(frame, static_leg_points, color=(128, 0, 128))
                     if final_leg_points is not None:
