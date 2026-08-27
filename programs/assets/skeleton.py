@@ -18,7 +18,7 @@ from mediapipe.tasks.python.vision import (
     drawing_utils,
 )
 
-from programs.camera import Camera
+from programs.assets.camera import Camera
 from programs.calibration import Calibration
 
 MODEL_PATH = "model/pose_landmarker_full.task"

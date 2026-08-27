@@ -3,8 +3,8 @@ import time
 import ctypes
 import cv2
 
-from programs.skeleton import Skeleton
-from programs.camera import Camera
+from programs.assets.skeleton import Skeleton
+from programs.assets.camera import Camera
 from programs.checks.legs import check_skeleton, check_legs, VISIBILITY_THRESHOLD, R_LEGS_LANDMARKS, L_LEGS_LANDMARKS
 from programs.checks.arms import check_arms, R_ARM_LANDMARKS, L_ARM_LANDMARKS
 
