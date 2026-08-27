@@ -5,17 +5,14 @@ import cv2
 
 from programs.skeleton import Skeleton
 from programs.camera import Camera
+from programs.checks.legs import check_skeleton, check_legs, VISIBILITY_THRESHOLD, R_LEGS_LANDMARKS, L_LEGS_LANDMARKS
+from programs.checks.arms import check_arms, R_ARM_LANDMARKS, L_ARM_LANDMARKS
 
 
-R_ARM_LANDMARKS = [12, 14, 16]  # shoulder, elbow, wrist
-L_ARM_LANDMARKS = [11, 13, 15]  # shoulder, elbow, wrist
 R_WRIST_LANDMARK = R_ARM_LANDMARKS[2]  # right wrist
 L_WRIST_LANDMARK = L_ARM_LANDMARKS[2]  # left wrist
-R_LEGS_LANDMARKS = [24, 26, 28]  # hip, knee, ankle
-L_LEGS_LANDMARKS = [23, 25, 27]  # hip, knee, ankle
 R_HIP_LANDMARKS = R_LEGS_LANDMARKS[0]  # right hip
 L_HIP_LANDMARKS = L_LEGS_LANDMARKS[0] # left hip
-VISIBILITY_THRESHOLD = 0.6
 DISTANCE_MIN_CM = 100
 DISTANCE_MAX_CM = 200
 DISTANCE_STILLNESS_TOLERANCE_CM = 10  # max drift from the anchor reading allowed during the hold
@@ -37,28 +34,6 @@ def distance_still(distance_cm, anchor_distance_cm):
           and abs(distance_cm - anchor_distance_cm) <= DISTANCE_STILLNESS_TOLERANCE_CM
      )
 
-def check_skeleton(camera):
-     if camera.landmarks:
-          return True
-     else:
-          return False
-
-def check_arms(camera):
-     check = check_skeleton(camera)
-     if check:
-          pose_landmarks = camera.landmarks[0]
-          right_arms = all(
-               pose_landmarks[i].visibility >= VISIBILITY_THRESHOLD
-               for i in R_ARM_LANDMARKS
-          )
-          left_arms = all(
-               pose_landmarks[i].visibility >= VISIBILITY_THRESHOLD
-               for i in L_ARM_LANDMARKS
-          )
-          return right_arms or left_arms
-     else:
-          return False
-     
 def calculate_angle(a, b, c):
      """Angle at vertex b (degrees) between rays b->a and b->c. Points are (x, y) pixel tuples."""
      v1 = (a[0] - b[0], a[1] - b[1])
@@ -255,22 +230,6 @@ def wrist_still_px(current_x_px, anchor_x_px, distance_cm, focal_length_px):
           return False
      tolerance_px = REACH_STILLNESS_TOLERANCE_CM * focal_length_px / distance_cm
      return abs(current_x_px - anchor_x_px) <= tolerance_px
-
-def check_legs(camera):
-     check = check_skeleton(camera)
-     if check:
-          pose_landmarks = camera.landmarks[0]
-          right_legs = all(
-               pose_landmarks[i].visibility >= VISIBILITY_THRESHOLD
-               for i in R_LEGS_LANDMARKS
-          )
-          left_legs = all(
-               pose_landmarks[i].visibility >= VISIBILITY_THRESHOLD
-               for i in L_LEGS_LANDMARKS
-          )
-          return right_legs or left_legs
-     else:
-          return False
 
 def leg_points_px(camera, frame, side):
      """Current (hip_pt, knee_pt, ankle_pt) pixel points for the given side, or None if not tracked/visible."""
