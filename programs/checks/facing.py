@@ -8,6 +8,7 @@ L_HIP_LANDMARK = L_LEGS_LANDMARKS[0]
 
 FACING_RATIO_TOLERANCE = 0.15  # max fractional drift from the baseline ratio before it counts as turned
 Z_DIFF_TOLERANCE = 0.08  # max left/right depth gap (normalized, same scale as x) before it counts as turned
+SIDEWAYS_Z_DIFF_MIN = 0.35  # min left/right depth gap before it counts as turned side-on
 
 def shoulder_width_px(camera, frame):
      check = check_skeleton(camera)
@@ -82,3 +83,14 @@ def facing_camera_live(camera, tolerance=Z_DIFF_TOLERANCE):
      if s_diff is None or h_diff is None:
           return False
      return s_diff <= tolerance and h_diff <= tolerance
+
+def facing_sideways_live(camera, tolerance=SIDEWAYS_Z_DIFF_MIN):
+     """Whether the user is currently turned side-on to the camera, judged
+     frame-by-frame from left/right shoulder+hip depth asymmetry. A profile
+     stance pushes the near side's shoulder/hip well in front of the far
+     side, widening shoulder_z_diff/hip_z_diff past `tolerance`."""
+     s_diff = shoulder_z_diff(camera)
+     h_diff = hip_z_diff(camera)
+     if s_diff is None or h_diff is None:
+          return False
+     return s_diff >= tolerance and h_diff >= tolerance
