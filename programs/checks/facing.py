@@ -7,6 +7,7 @@ R_HIP_LANDMARK = R_LEGS_LANDMARKS[0]
 L_HIP_LANDMARK = L_LEGS_LANDMARKS[0]
 
 FACING_RATIO_TOLERANCE = 0.15  # max fractional drift from the baseline ratio before it counts as turned
+Z_DIFF_TOLERANCE = 0.08  # max left/right depth gap (normalized, same scale as x) before it counts as turned
 
 def shoulder_width_px(camera, frame):
      check = check_skeleton(camera)
@@ -46,3 +47,38 @@ def facing_camera(current_ratio, baseline_ratio, tolerance=FACING_RATIO_TOLERANC
      if current_ratio is None or baseline_ratio in (None, 0):
           return False
      return abs(current_ratio - baseline_ratio) / baseline_ratio <= tolerance
+
+def shoulder_z_diff(camera):
+     """Depth gap between left/right shoulders, or None if either isn't tracked/visible."""
+     check = check_skeleton(camera)
+     if not check:
+          return None
+     pose_landmarks = camera.landmarks[0]
+     l_shoulder = pose_landmarks[L_SHOULDER_LANDMARK]
+     r_shoulder = pose_landmarks[R_SHOULDER_LANDMARK]
+     if min(l_shoulder.visibility, r_shoulder.visibility) < VISIBILITY_THRESHOLD:
+          return None
+     return abs(l_shoulder.z - r_shoulder.z)
+
+def hip_z_diff(camera):
+     """Depth gap between left/right hips, or None if either isn't tracked/visible."""
+     check = check_skeleton(camera)
+     if not check:
+          return None
+     pose_landmarks = camera.landmarks[0]
+     l_hip = pose_landmarks[L_HIP_LANDMARK]
+     r_hip = pose_landmarks[R_HIP_LANDMARK]
+     if min(l_hip.visibility, r_hip.visibility) < VISIBILITY_THRESHOLD:
+          return None
+     return abs(l_hip.z - r_hip.z)
+
+def facing_camera_live(camera, tolerance=Z_DIFF_TOLERANCE):
+     """Whether the user is currently facing the camera, judged frame-by-frame
+     from left/right shoulder+hip depth symmetry. No calibration baseline
+     needed: a turned torso pushes one side's landmarks closer to the camera
+     than the other, widening shoulder_z_diff/hip_z_diff past `tolerance`."""
+     s_diff = shoulder_z_diff(camera)
+     h_diff = hip_z_diff(camera)
+     if s_diff is None or h_diff is None:
+          return False
+     return s_diff <= tolerance and h_diff <= tolerance
