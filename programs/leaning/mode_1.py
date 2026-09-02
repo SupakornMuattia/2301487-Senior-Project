@@ -368,7 +368,7 @@ if __name__ == "__main__":
      camera.open_camera()
      try:
           while True:
-               ok, frame = camera.cap.read()
+               ok, frame = camera.read_frame()
                window_name = "Camera Preview (q or Esc to quit)"
                cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
                window_sized = False
@@ -376,7 +376,6 @@ if __name__ == "__main__":
                     print("Failed to read frame from camera")
                     break
 
-               frame = cv2.flip(frame, 1)
                if not window_sized:
                     fit_window_to_screen(window_name, frame)
                     window_sized = True

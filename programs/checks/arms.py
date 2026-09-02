@@ -1,5 +1,7 @@
 R_ARM_LANDMARKS = [12, 14, 16]  # shoulder, elbow, wrist
 L_ARM_LANDMARKS = [11, 13, 15]  # shoulder, elbow, wrist
+R_INDEX_LANDMARK = 20
+L_INDEX_LANDMARK = 19
 VISIBILITY_THRESHOLD = 0.6
 
 def check_skeleton(camera):

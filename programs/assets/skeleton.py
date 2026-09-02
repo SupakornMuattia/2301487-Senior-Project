@@ -291,13 +291,11 @@ class Skeleton:
         window_sized = False
         try:
             while True:
-                ok, frame = self.camera.cap.read()
+                ok, frame = self.camera.read_frame()
                 if not ok:
                     print("Failed to read frame from camera")
                     break
 
-                frame = cv2.flip(frame, 1)
-                # frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
                 # frame = Camera.frame_crop(frame, self.camera.crop_w, self.camera.crop_h)
                 
                 if not window_sized:

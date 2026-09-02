@@ -1,9 +1,5 @@
 import ctypes
-
 import cv2
-
-url = "https://192.168.1.28:8080/video"
-url_2 = "https://10.99.27.126:8080/video"
 
 
 class Camera:
@@ -25,8 +21,8 @@ class Camera:
         return frame[y0 : y0 + crop_h, x0 : x0 + crop_w]
 
     def open_camera(self):
-        self.cap = cv2.VideoCapture(url)
-        
+        self.cap = cv2.VideoCapture(self.camera, cv2.CAP_DSHOW)
+
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
@@ -38,6 +34,14 @@ class Camera:
         crop_w = min(self.crop_w, actual_width)
         crop_h = min(self.crop_h, actual_height)
         print(f"Camera captures {actual_width}x{actual_height}, cropping to {crop_w}x{crop_h}")
+
+    def read_frame(self):
+        ok, frame = self.cap.read()
+        if not ok:
+            return False, None
+        frame = cv2.flip(frame, 1)
+        frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        return True, frame
 
     def release(self):
         if self.cap is not None:
@@ -67,13 +71,11 @@ class Camera:
         window_sized = False
         try:
             while True:
-                ok, frame = self.cap.read()
+                ok, frame = self.read_frame()
                 if not ok:
                     print("Failed to read frame from camera")
                     break
 
-                frame = cv2.flip(frame, 1)
-                # frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
                 # frame = self.frame_crop(frame, self.crop_w, self.crop_h)
 
                 if not window_sized:

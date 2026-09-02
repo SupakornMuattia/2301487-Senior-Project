@@ -4,7 +4,13 @@ import cv2
 
 from programs.assets.camera import Camera
 from programs.assets.skeleton import Skeleton
-from programs.checks.arms import check_arms, R_ARM_LANDMARKS, L_ARM_LANDMARKS
+from programs.checks.arms import (
+     check_arms,
+     R_ARM_LANDMARKS,
+     L_ARM_LANDMARKS,
+     R_INDEX_LANDMARK,
+     L_INDEX_LANDMARK,
+)
 from programs.checks.legs import check_legs, check_skeleton, R_LEGS_LANDMARKS, L_LEGS_LANDMARKS, VISIBILITY_THRESHOLD
 from programs.checks.facing import facing_camera_live, facing_sideways_live
 
@@ -19,6 +25,12 @@ WHITE = (255, 255, 255)
 GUIDE_MARK_X_FRAC = 0.22  # horizontal position of the guide mark, as a fraction of frame width
 GUIDE_MARK_THICKNESS = 3
 MARK_TOLERANCE_FRAC = 0.06  # allowed horizontal drift (fraction of frame width) from the guide mark
+
+REACH_TARGET_INCHES = 11  # midpoint of the 10-12 inch functional-reach target offset
+INCH_TO_CM = 2.54
+ANKLE_DISTANCE_MAX_CM = 10  # ankle-to-ankle distance beyond this counts as a footstep (mirrors mode_1)
+TOUCH_TOLERANCE_CM = 3  # index fingertip within this distance of the target counts as a touch
+STEP_LIMIT = 2  # more than this many steps to reach the object scores 0
 
 
 def draw_status(frame, text, ok, row):
@@ -174,6 +186,117 @@ def arm_angle_in_range(angles, angle_min=ARM_ANGLE_MIN, angle_max=ARM_ANGLE_MAX)
      return any(angle_min <= a <= angle_max for a in angles.values())
 
 
+def get_reach_target(camera, frame, angles, distance_cm, skeleton):
+     """Pixel point of the index fingertip on whichever arm is raised to ~90
+     degrees, plus a target point REACH_TARGET_INCHES further along the same
+     reach direction, leveled to that arm's shoulder height. Returns
+     (side, index_pt, target_pt), or None if no arm is at 90 degrees, the
+     landmarks aren't visible enough, or distance_cm/calibration is missing."""
+     if not check_skeleton(camera):
+          return None
+     side = next((s for s, a in angles.items() if ARM_ANGLE_MIN <= a <= ARM_ANGLE_MAX), None)
+     if side is None:
+          return None
+     if not distance_cm or skeleton.focal_length_px is None:
+          return None
+
+     pose_landmarks = camera.landmarks[0]
+     shoulder_i, index_i = (
+          (R_ARM_LANDMARKS[0], R_INDEX_LANDMARK) if side == "right"
+          else (L_ARM_LANDMARKS[0], L_INDEX_LANDMARK)
+     )
+     shoulder, index = pose_landmarks[shoulder_i], pose_landmarks[index_i]
+     if min(shoulder.visibility, index.visibility) < VISIBILITY_THRESHOLD:
+          return None
+
+     h, w = frame.shape[:2]
+     shoulder_pt = (shoulder.x * w, shoulder.y * h)
+     index_pt = (index.x * w, index.y * h)
+
+     pixels_per_cm = skeleton.focal_length_px / distance_cm
+     offset_px = REACH_TARGET_INCHES * INCH_TO_CM * pixels_per_cm
+     direction = 1 if index_pt[0] >= shoulder_pt[0] else -1
+     target_pt = (index_pt[0] + direction * offset_px, shoulder_pt[1])
+
+     return side, index_pt, target_pt
+
+
+def draw_reach_target(frame, index_pt, target_pt):
+     index_xy = (int(index_pt[0]), int(index_pt[1]))
+     target_xy = (int(target_pt[0]), int(target_pt[1]))
+     cv2.line(frame, index_xy, target_xy, (0, 140, 255), 2)
+     cv2.circle(frame, index_xy, 8, (0, 255, 255), -1)
+     cv2.circle(frame, target_xy, 14, (0, 140, 255), 3)
+
+
+def ankle_points_px(camera, frame):
+     """Current (left_ankle_pt, right_ankle_pt) pixel points, or None if not tracked/visible."""
+     if not check_skeleton(camera):
+          return None
+     pose_landmarks = camera.landmarks[0]
+     l_ankle = pose_landmarks[L_LEGS_LANDMARKS[2]]
+     r_ankle = pose_landmarks[R_LEGS_LANDMARKS[2]]
+     if min(l_ankle.visibility, r_ankle.visibility) < VISIBILITY_THRESHOLD:
+          return None
+     h, w = frame.shape[:2]
+     return (l_ankle.x * w, l_ankle.y * h), (r_ankle.x * w, r_ankle.y * h)
+
+
+def ankle_distance_cm(ankle_pts, distance_cm, focal_length_px):
+     """Current ankle-to-ankle distance (cm) via the pinhole model."""
+     if ankle_pts is None or not distance_cm or focal_length_px is None:
+          return None
+     l_pt, r_pt = ankle_pts
+     ankle_px = math.hypot(l_pt[0] - r_pt[0], l_pt[1] - r_pt[1])
+     return ankle_px * distance_cm / focal_length_px
+
+
+def footstep_detected(ankle_distance_cm_value, threshold=ANKLE_DISTANCE_MAX_CM):
+     return ankle_distance_cm_value is not None and ankle_distance_cm_value > threshold
+
+
+def draw_ankle_line(frame, ankle_pts, distance_cm_value, color=(0, 255, 0)):
+     l_pt = (int(ankle_pts[0][0]), int(ankle_pts[0][1]))
+     r_pt = (int(ankle_pts[1][0]), int(ankle_pts[1][1]))
+     cv2.line(frame, l_pt, r_pt, color, 4)
+     if distance_cm_value is not None:
+          mid_pt = ((l_pt[0] + r_pt[0]) // 2, (l_pt[1] + r_pt[1]) // 2)
+          cv2.putText(
+               frame, f"{distance_cm_value:.1f}cm", (mid_pt[0], mid_pt[1] - 15),
+               cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2,
+          )
+
+
+def object_touched(index_pt, target_pt, distance_cm, focal_length_px, tolerance_cm=TOUCH_TOLERANCE_CM):
+     """Whether the index fingertip has reached the target point, within
+     tolerance_cm, converted to pixels via the pinhole model."""
+     if None in (index_pt, target_pt, distance_cm, focal_length_px):
+          return False
+     gap_px = math.hypot(index_pt[0] - target_pt[0], index_pt[1] - target_pt[1])
+     gap_cm = gap_px * distance_cm / focal_length_px
+     return gap_cm <= tolerance_cm
+
+
+def reach_score(touched, step_count, supervised=False):
+     """Functional-reach risk score:
+     0 - unable to reach the object without taking > STEP_LIMIT steps
+     1 - reached, needed 2 steps
+     2 - reached, needed 1 step
+     3 - reached without moving the feet, but needed supervision
+     4 - reached safely and independently without moving the feet
+     Returns None while the attempt is still undecided (not yet touched and
+     step_count hasn't exceeded the limit)."""
+     if step_count > STEP_LIMIT:
+          return 0
+     if not touched:
+          return None
+     if step_count == 0:
+          return 3 if supervised else 4
+     if step_count == 1:
+          return 2
+     return 1  # step_count == 2
+
+
 def draw_message(frame, text):
      h, w = frame.shape[:2]
      size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.5, 3)
@@ -188,6 +311,10 @@ if __name__ == "__main__":
      state = "state_1"
      countdown_start = None
      captured_distance_cm = None
+     step_count = 0  # counts discrete step events (rising edges) during the current state_4 attempt
+     ankle_apart_prev = False
+     touched = False
+     supervised = False  # toggled with 'v' when 0 steps were needed but the user still needed supervision
 
      camera.open_camera()
      window_name = "Mode 2 (q or Esc to quit)"
@@ -195,12 +322,11 @@ if __name__ == "__main__":
      window_sized = False
      try:
           while True:
-               ok, frame = camera.cap.read()
+               ok, frame = camera.read_frame()
                if not ok:
                     print("Failed to read frame from camera")
                     break
 
-               frame = cv2.flip(frame, 1)
                if not window_sized:
                     Camera.fit_window_to_screen(window_name, frame)
                     window_sized = True
@@ -282,13 +408,48 @@ if __name__ == "__main__":
                          if remaining <= 0:
                               state = "state_4"
                               countdown_start = None
+                              step_count = 0
+                              ankle_apart_prev = False
+                              touched = False
+                              supervised = False
                          else:
                               draw_message(frame, str(remaining))
                     else:
                          countdown_start = None
                          draw_message(frame, "turn sideways \nand \nraise your arm to 90 degrees")
                elif state == "state_4":
-                    draw_message(frame, "wait state 4")
+                    arm_angles = check_arm_angle(camera, frame)
+                    reach = get_reach_target(camera, frame, arm_angles, captured_distance_cm, skeleton)
+
+                    ankle_pts = ankle_points_px(camera, frame)
+                    live_ankle_distance_cm = ankle_distance_cm(ankle_pts, captured_distance_cm, skeleton.focal_length_px)
+                    ankle_apart_now = footstep_detected(live_ankle_distance_cm)
+                    if ankle_pts is not None:
+                         draw_ankle_line(frame, ankle_pts, live_ankle_distance_cm, color=RED if ankle_apart_now else GREEN)
+                         if ankle_apart_now and not ankle_apart_prev:
+                              step_count += 1
+                         ankle_apart_prev = ankle_apart_now
+
+                    draw_status(frame, f"steps: {step_count}", step_count == 0, row=1)
+
+                    if step_count > STEP_LIMIT:
+                         state = "state_5"
+                    elif reach is not None:
+                         side, index_pt, target_pt = reach
+                         draw_reach_target(frame, index_pt, target_pt)
+                         draw_status(frame, f"tracking {side} index", True, row=0)
+
+                         if object_touched(index_pt, target_pt, captured_distance_cm, skeleton.focal_length_px):
+                              touched = True
+                              state = "state_5"
+                    else:
+                         draw_status(frame, "tracking index", False, row=0)
+                         draw_message(frame, "raise your arm to 90 degrees")
+               elif state == "state_5":
+                    score = reach_score(touched, step_count, supervised)
+                    draw_status(frame, "touched", touched, row=0)
+                    draw_status(frame, f"steps: {step_count}", step_count == 0, row=1)
+                    draw_message(frame, f"score: {score}")
 
                cv2.imshow(window_name, frame)
                key = cv2.waitKey(1) & 0xFF
@@ -298,6 +459,10 @@ if __name__ == "__main__":
                     skeleton.disable() if skeleton.draw_enabled else skeleton.enable()
                elif key == ord("m"):  # toggle median+EMA smoothing
                     skeleton.toggle_smoothing()
+               elif key == ord("v") and state == "state_5" and touched and step_count == 0:
+                    # clinician judgment call, not camera-detectable: did the 0-step reach
+                    # still need supervision? toggles the score between 4 and 3.
+                    supervised = not supervised
      finally:
           skeleton.landmarker.close()
           skeleton.face_landmarker.close()
