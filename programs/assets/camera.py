@@ -39,8 +39,8 @@ class Camera:
         ok, frame = self.cap.read()
         if not ok:
             return False, None
-        frame = cv2.flip(frame, 1)
-        frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        # frame = cv2.flip(frame, 1)
+        frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
         return True, frame
 
     def release(self):

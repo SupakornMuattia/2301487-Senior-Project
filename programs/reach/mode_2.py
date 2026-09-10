@@ -315,6 +315,8 @@ if __name__ == "__main__":
      ankle_apart_prev = False
      touched = False
      supervised = False  # toggled with 'v' when 0 steps were needed but the user still needed supervision
+     static_target_pt = None
+     static_target_side = None
 
      camera.open_camera()
      window_name = "Mode 2 (q or Esc to quit)"
