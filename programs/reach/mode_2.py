@@ -26,7 +26,7 @@ GUIDE_MARK_X_FRAC = 0.22  # horizontal position of the guide mark, as a fraction
 GUIDE_MARK_THICKNESS = 3
 MARK_TOLERANCE_FRAC = 0.06  # allowed horizontal drift (fraction of frame width) from the guide mark
 
-REACH_TARGET_INCHES = 11  # midpoint of the 10-12 inch functional-reach target offset
+REACH_TARGET_CM = 30.0
 INCH_TO_CM = 2.54
 ANKLE_DISTANCE_MAX_CM = 10  # ankle-to-ankle distance beyond this counts as a footstep (mirrors mode_1)
 TOUCH_TOLERANCE_CM = 3  # index fingertip within this distance of the target counts as a touch
@@ -414,6 +414,13 @@ if __name__ == "__main__":
                               ankle_apart_prev = False
                               touched = False
                               supervised = False
+
+                              arm_angles = check_arm_angle(camera, frame)
+                              reach = get_reach_target(camera, frame, arm_angles, captured_distance_cm, skeleton)
+
+                              if reach is not None:
+                                   static_target_side, _, static_target_pt = reach
+
                          else:
                               draw_message(frame, str(remaining))
                     else:
@@ -421,8 +428,11 @@ if __name__ == "__main__":
                          draw_message(frame, "turn sideways \nand \nraise your arm to 90 degrees")
                elif state == "state_4":
                     arm_angles = check_arm_angle(camera, frame)
-                    reach = get_reach_target(camera, frame, arm_angles, captured_distance_cm, skeleton)
 
+                    # ---------------------------------------------------------
+                    # Check whether the feet move apart
+                    # ---------------------------------------------------------
+                    
                     ankle_pts = ankle_points_px(camera, frame)
                     live_ankle_distance_cm = ankle_distance_cm(ankle_pts, captured_distance_cm, skeleton.focal_length_px)
                     ankle_apart_now = footstep_detected(live_ankle_distance_cm)
@@ -436,17 +446,35 @@ if __name__ == "__main__":
 
                     if step_count > STEP_LIMIT:
                          state = "state_5"
-                    elif reach is not None:
-                         side, index_pt, target_pt = reach
-                         draw_reach_target(frame, index_pt, target_pt)
-                         draw_status(frame, f"tracking {side} index", True, row=0)
 
-                         if object_touched(index_pt, target_pt, captured_distance_cm, skeleton.focal_length_px):
-                              touched = True
-                              state = "state_5"
+                    elif static_target_side is not None and static_target_pt is not None:
+                         side = static_target_side
+                         target_pt = static_target_pt
+          
+                         pose_landmarks = camera.landmarks[0]
+
+                         if side == "left":
+                              index = pose_landmarks[L_INDEX_LANDMARK]
+                         elif side == "right":
+                              index = pose_landmarks[R_INDEX_LANDMARK]
+
+                         # Draw the static 11-inch target and current fingertip
+                         if index.visibility >= VISIBILITY_THRESHOLD:
+                              h, w = frame.shape[:2]
+                              current_index_pt = (index.x * w,index.y * h)
+
+                              draw_reach_target(frame, current_index_pt, target_pt)
+                              draw_status(frame, f"tracking {side} index", True, row=0)
+
+                              if object_touched(current_index_pt, target_pt, captured_distance_cm, skeleton.focal_length_px):
+                                   touched = True
+                                   state = "state_5"
+                         else:
+                              draw_status(frame, f"tracking {side} index", False, row=0)
                     else:
                          draw_status(frame, "tracking index", False, row=0)
                          draw_message(frame, "raise your arm to 90 degrees")
+
                elif state == "state_5":
                     score = reach_score(touched, step_count, supervised)
                     draw_status(frame, "touched", touched, row=0)
